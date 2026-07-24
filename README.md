@@ -15,7 +15,7 @@ Reboot when prompted, then open the new "Ubuntu" app from the Start menu.
 
 **Inside that Ubuntu shell**, run:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/1206likith/Wireless_Multi_GPU/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/1206likith/Wireless_Multi_GPU/master/install.sh | bash
 ```
 (Replace `1206likith/Wireless_Multi_GPU` with wherever this repo actually lives
 — see the URL in your browser or `git remote -v` in this repo.)

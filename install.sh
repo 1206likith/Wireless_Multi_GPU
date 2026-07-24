@@ -4,7 +4,7 @@
 # native Windows PowerShell/CMD), after WSL2 itself is installed.
 #
 # Usage (from inside WSL2 Ubuntu):
-#   curl -fsSL https://raw.githubusercontent.com/<GITHUB_USER>/<REPO>/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/1206likith/Wireless_Multi_GPU/master/install.sh | bash
 # or, after cloning the repo:
 #   bash install.sh
 #
