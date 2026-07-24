@@ -1,0 +1,20 @@
+name: yolo-detect-v4-ddp
+version: 1
+entry_point: scripts/36b_train_yolo_v4_ddp_wsl2.py
+description: >
+  Multi-node YOLOv8s detection training on the yolo_detect_v4 dataset,
+  via PyTorch DistributedDataParallel over WSL2 + NCCL. Root-caused this
+  session: native Windows PyTorch has no NCCL backend at all; this job
+  must run inside each machine's WSL2, not natively.
+
+requires:
+  min_gpu_memory_gb: 8
+  dataset: yolo_detect_v4
+  python_env: yolo_ddp_env
+
+roles:
+  rank_assignment: manual  # current state: still hand-launched with --node_rank per machine, see DDP_MULTINODE_SETUP.md. Becomes coordinator-assigned once Layer 2 exists.
+
+env:
+  PER_GPU_BATCH: "{auto}"   # placeholder for coordinator-computed value; manual runs set this by hand today
+  MASTER_PORT: "29500"

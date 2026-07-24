@@ -1,0 +1,456 @@
+<title>GPU Cluster — Dashboard</title>
+<style>
+  :root {
+    --bg: #12151b;
+    --panel: #1b1f28;
+    --panel-raised: #232833;
+    --border: #2a3040;
+    --text: #e8eaef;
+    --text-muted: #8b93a3;
+    --text-faint: #5a6275;
+    --accent: #5b8cff;
+    --accent-dim: #2f3d5c;
+    --good: #3ecf8e;
+    --good-dim: #1e3a30;
+    --warn: #e0a63e;
+    --warn-dim: #3a301c;
+    --bad: #e05d5d;
+    --bad-dim: #3a2222;
+
+    --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  }
+
+  :root[data-theme="light"] {
+    --bg: #f3f4f7;
+    --panel: #ffffff;
+    --panel-raised: #ffffff;
+    --border: #dde1e9;
+    --text: #1a1d24;
+    --text-muted: #5c6478;
+    --text-faint: #9199ab;
+    --accent: #3f6fe0;
+    --accent-dim: #dce5fb;
+    --good: #1f9d63;
+    --good-dim: #e1f5ec;
+    --warn: #b5791f;
+    --warn-dim: #faf0dc;
+    --bad: #c73e3e;
+    --bad-dim: #fbe6e6;
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #f3f4f7;
+      --panel: #ffffff;
+      --panel-raised: #ffffff;
+      --border: #dde1e9;
+      --text: #1a1d24;
+      --text-muted: #5c6478;
+      --text-faint: #9199ab;
+      --accent: #3f6fe0;
+      --accent-dim: #dce5fb;
+      --good: #1f9d63;
+      --good-dim: #e1f5ec;
+      --warn: #b5791f;
+      --warn-dim: #faf0dc;
+      --bad: #c73e3e;
+      --bad-dim: #fbe6e6;
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-body);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 1120px;
+    margin: 0 auto;
+    padding: 32px 24px 64px;
+  }
+
+  /* ---- Header ---- */
+  header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 28px;
+    flex-wrap: wrap;
+  }
+
+  .title-block h1 {
+    font-size: 20px;
+    font-weight: 650;
+    margin: 0 0 4px;
+    letter-spacing: -0.01em;
+  }
+
+  .title-block .sub {
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+
+  .cluster-stat {
+    display: flex;
+    gap: 28px;
+  }
+
+  .cluster-stat .stat {
+    text-align: right;
+  }
+
+  .cluster-stat .stat .num {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 22px;
+    font-weight: 600;
+    display: block;
+  }
+
+  .cluster-stat .stat .label {
+    font-size: 11px;
+    color: var(--text-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  /* ---- Scaffold notice ---- */
+  .scaffold-notice {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--warn-dim);
+    border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+    color: var(--warn);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 12.5px;
+    margin-bottom: 28px;
+  }
+
+  .scaffold-notice .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--warn);
+    flex-shrink: 0;
+  }
+
+  /* ---- Section headings ---- */
+  h2 {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-faint);
+    font-weight: 650;
+    margin: 0 0 12px;
+  }
+
+  section { margin-bottom: 36px; }
+
+  /* ---- Machine grid ---- */
+  .machine-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 14px;
+  }
+
+  .machine-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+  }
+
+  .machine-card.is-placeholder {
+    border-style: dashed;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 168px;
+    color: var(--text-faint);
+    font-size: 13px;
+  }
+
+  .machine-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 14px;
+  }
+
+  .machine-name {
+    font-weight: 600;
+    font-size: 14px;
+  }
+
+  .machine-host {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--text-faint);
+    margin-top: 2px;
+  }
+
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 8px 3px 6px;
+    border-radius: 100px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+
+  .status-pill .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+  }
+
+  .status-pill.online { background: var(--good-dim); color: var(--good); }
+  .status-pill.online .dot { background: var(--good); box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 20%, transparent); }
+  .status-pill.busy { background: var(--accent-dim); color: var(--accent); }
+  .status-pill.busy .dot { background: var(--accent); }
+  .status-pill.offline { background: var(--bad-dim); color: var(--bad); }
+  .status-pill.offline .dot { background: var(--bad); }
+
+  .stat-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 0;
+    border-top: 1px solid var(--border);
+    font-size: 12.5px;
+  }
+
+  .stat-row:first-of-type { border-top: none; }
+
+  .stat-row .k { color: var(--text-muted); }
+  .stat-row .v {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+  }
+
+  .meter {
+    width: 72px;
+    height: 5px;
+    border-radius: 4px;
+    background: var(--border);
+    overflow: hidden;
+    display: inline-block;
+    margin-left: 8px;
+    vertical-align: middle;
+  }
+
+  .meter > span {
+    display: block;
+    height: 100%;
+    background: var(--accent);
+    border-radius: 4px;
+  }
+
+  /* ---- Job table ---- */
+  .job-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .job-table-scroll { overflow-x: auto; border-radius: 10px; }
+
+  .job-table th {
+    text-align: left;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-faint);
+    font-weight: 600;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+
+  .job-table td {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+    white-space: nowrap;
+  }
+
+  .job-table tr:last-child td { border-bottom: none; }
+
+  .job-name { font-weight: 600; }
+  .job-meta { color: var(--text-faint); font-size: 11.5px; margin-top: 1px; }
+
+  .metric-val {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+  }
+
+  .progress-cell { min-width: 140px; }
+  .progress-track {
+    width: 100%;
+    height: 6px;
+    border-radius: 4px;
+    background: var(--border);
+    overflow: hidden;
+    margin-bottom: 4px;
+  }
+  .progress-track > span {
+    display: block;
+    height: 100%;
+    background: var(--good);
+    border-radius: 4px;
+  }
+  .progress-label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-faint);
+  }
+
+  footer {
+    margin-top: 40px;
+    font-size: 11.5px;
+    color: var(--text-faint);
+    border-top: 1px solid var(--border);
+    padding-top: 16px;
+  }
+
+  code {
+    font-family: var(--font-mono);
+    background: var(--panel-raised);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 11.5px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="title-block">
+      <h1>GPU Cluster</h1>
+      <div class="sub">Distributed training — connected machines &amp; running jobs</div>
+    </div>
+    <div class="cluster-stat">
+      <div class="stat">
+        <span class="num">1<span style="color: var(--text-faint);">/2</span></span>
+        <span class="label">Machines online</span>
+      </div>
+      <div class="stat">
+        <span class="num">1</span>
+        <span class="label">Jobs running</span>
+      </div>
+      <div class="stat">
+        <span class="num">20</span>
+        <span class="label">GB VRAM total</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="scaffold-notice">
+    <span class="dot"></span>
+    Scaffold shell — machine cards below are illustrative. Wires up to real data once the Layer 2 coordinator exists.
+  </div>
+
+  <section>
+    <h2>Machines</h2>
+    <div class="machine-grid">
+      <div class="machine-card">
+        <div class="machine-card-head">
+          <div>
+            <div class="machine-name">This laptop</div>
+            <div class="machine-host">RTX 5060 · 172.16.201.52</div>
+          </div>
+          <span class="status-pill busy"><span class="dot"></span>Training</span>
+        </div>
+        <div class="stat-row">
+          <span class="k">GPU util</span>
+          <span class="v">61%<span class="meter"><span style="width: 61%;"></span></span></span>
+        </div>
+        <div class="stat-row">
+          <span class="k">VRAM</span>
+          <span class="v">2.1 / 8.0 GB</span>
+        </div>
+        <div class="stat-row">
+          <span class="k">Current job</span>
+          <span class="v">unet-v2-seg</span>
+        </div>
+      </div>
+
+      <div class="machine-card is-placeholder">
+        Second laptop — not yet connected
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Job queue</h2>
+    <div class="job-table-scroll">
+      <table class="job-table">
+        <thead>
+          <tr>
+            <th>Job</th>
+            <th>Machine</th>
+            <th>Metric</th>
+            <th>Progress</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>
+              <div class="job-name">unet-v2-seg</div>
+              <div class="job-meta">segmentation · efficientnet-b4</div>
+            </td>
+            <td>This laptop</td>
+            <td class="metric-val">mIoU 0.688</td>
+            <td class="progress-cell">
+              <div class="progress-track"><span style="width: 72%;"></span></div>
+              <div class="progress-label">epoch 57 / 80</div>
+            </td>
+            <td><span class="status-pill busy"><span class="dot"></span>Running</span></td>
+          </tr>
+          <tr>
+            <td>
+              <div class="job-name">yolo-detect-v4-cbam</div>
+              <div class="job-meta">detection · yolov8s + CBAM</div>
+            </td>
+            <td>—</td>
+            <td class="metric-val">—</td>
+            <td class="progress-cell">
+              <div class="progress-track"><span style="width: 0%; background: var(--text-faint);"></span></div>
+              <div class="progress-label">queued</div>
+            </td>
+            <td><span class="status-pill" style="background: var(--panel-raised); color: var(--text-faint);"><span class="dot" style="background: var(--text-faint);"></span>Parked</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer>
+    Layer 4 scaffold — static shell, no live backend yet. Once Layer 2's
+    coordinator exists, this reads from <code>job-specs/</code> and each
+    worker's reported status instead of the hardcoded rows above.
+  </footer>
+</div>
