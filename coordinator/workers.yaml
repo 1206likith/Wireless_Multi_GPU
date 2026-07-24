@@ -1,0 +1,17 @@
+# Static worker list for the Layer 2 coordinator. No auto-discovery --
+# add/remove machines here by hand. `host` should be a Tailscale IP
+# (100.64.0.0/10 range) once Layer 1 is proven cross-machine; for now this
+# defaults to loopback so the coordinator + one worker daemon can be tested
+# on a single machine (see coordinator/README.md).
+#
+# token_file must point at the same shared-secret file this worker's
+# worker_daemon.py was started with (--token-file). Generate one per
+# worker with:
+#   python -c "import secrets; print(secrets.token_hex(32))" > coordinator/tokens/this-laptop.secret
+# and copy it to that worker out-of-band (NOT over this project's own HTTP
+# channel) -- `coordinator/tokens/` is gitignored, never commit a real token.
+workers:
+  - name: this-laptop
+    host: 127.0.0.1
+    port: 8770
+    token_file: coordinator/tokens/this-laptop.secret

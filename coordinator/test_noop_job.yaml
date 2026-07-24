@@ -1,0 +1,20 @@
+# Test-only job spec (Layer 3 SCHEMA.md format) pointing at the trivial
+# no-op script, used by coordinator/test_e2e.py so the end-to-end dispatch
+# test doesn't have to run the real multi-hour YOLO DDP training job.
+name: test-noop
+version: 1
+entry_point: coordinator/test_noop_job.py
+description: >
+  Trivial no-op job for exercising the coordinator/worker dispatch loop
+  locally, without touching the real training script.
+
+requires:
+  min_gpu_memory_gb: 0
+  dataset: none
+  python_env: none
+
+roles:
+  rank_assignment: coordinator-assigned
+
+env:
+  MASTER_PORT: "29601"

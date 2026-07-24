@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+coordinator/tokens/
+coordinator/*.secret
+coordinator/status.json
+coordinator/test_status.json
