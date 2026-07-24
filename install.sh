@@ -41,7 +41,7 @@ set -uo pipefail  # NOT -e: we want to detect failures ourselves and report
 
 VENV_DIR="$HOME/yolo_ddp_env"
 PROJECT_DIR="$HOME/yolo_ddp_project"
-REPO_URL="__REPO_URL_PLACEHOLDER__"  # filled in by publish step, see README
+REPO_URL="https://github.com/1206likith/Wireless_Multi_GPU.git"  # filled in by publish step, see README
 
 STATUS_OK=()
 STATUS_WARN=()
@@ -135,10 +135,7 @@ else
 fi
 
 # --- Step 6: project code ---
-if [ "$REPO_URL" = "__REPO_URL_PLACEHOLDER__" ]; then
-    warn "REPO_URL placeholder not filled in -- skipping project clone step."
-    warn "Manually clone the training-scripts repo into $PROJECT_DIR."
-elif [ -d "$PROJECT_DIR/.git" ]; then
+if [ -d "$PROJECT_DIR/.git" ]; then
     echo "Updating existing clone at $PROJECT_DIR..."
     git -C "$PROJECT_DIR" pull --ff-only && ok "Project code updated." || warn "git pull failed -- check for local changes or conflicts."
 else
