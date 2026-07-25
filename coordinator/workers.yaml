@@ -15,8 +15,7 @@ workers:
     host: 100.127.244.13  # this laptop's real Tailscale IP, confirmed reachable 2026-07-25
     port: 8770
     token_file: coordinator/tokens/this-laptop.secret
-  # second laptop's entry goes here once it's on Tailscale too:
-  # - name: second-laptop
-  #   host: 100.x.y.z
-  #   port: 8770
-  #   token_file: coordinator/tokens/second-laptop.secret
+  - name: second-laptop
+    host: 100.81.199.100  # re-registered IP after fresh Tailscale login post-invite-accept, 2026-07-25
+    port: 8770
+    token_file: coordinator/tokens/second-laptop.secret
