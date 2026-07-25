@@ -93,15 +93,35 @@ if (-not $tailscaleInstalled) {
 }
 
 # --- Step 2: Tailscale login/connect ---
-$tsStatus = & tailscale status 2>&1
-if ($LASTEXITCODE -ne 0 -or $tsStatus -match "Logged out") {
-    Write-Warn "Not logged into Tailscale yet. Run 'tailscale up' manually and complete the browser login -- this can't be automated (needs your Tailscale/Google/GitHub account)."
-    Write-Host "  After running 'tailscale up' and logging in, re-run this script to continue setup."
+# BUG FIX: resolve the exe by known install path, not the bare "tailscale"
+# command name. Right after a fresh install in this SAME PowerShell
+# process, Windows has updated the system PATH but this already-running
+# process's environment hasn't refreshed (that only happens on new
+# process/shell start) -- calling the bare command name fails with
+# CommandNotFoundException, which got silently swallowed by 2>&1 and
+# produced a false "Tailscale is connected" message instead of the true
+# "not logged in yet" state. Resolving by path sidesteps the stale-PATH
+# problem entirely.
+$tailscaleExe = "C:\Program Files\Tailscale\tailscale.exe"
+if (-not (Test-Path $tailscaleExe)) {
+    $cmd = Get-Command tailscale -ErrorAction SilentlyContinue
+    if ($cmd) { $tailscaleExe = $cmd.Source }
+}
+
+if (-not (Test-Path $tailscaleExe)) {
+    Write-Fail "Could not locate tailscale.exe after install. Open a NEW PowerShell window (not this one) and re-run this script -- a fresh shell picks up the updated PATH."
 } else {
-    Write-Ok "Tailscale is connected."
-    $tsIP = (& tailscale ip -4 2>&1)
-    Write-Host "  This machine's Tailscale IP: $tsIP"
-    Write-Host "  (The other laptop will use this IP to reach this machine.)"
+    $tsStatus = & $tailscaleExe status 2>&1
+    $tsExitCode = $LASTEXITCODE
+    if ($tsExitCode -ne 0 -or $tsStatus -match "Logged out" -or $tsStatus -match "NeedsLogin") {
+        Write-Warn "Not logged into Tailscale yet. Run '& `"$tailscaleExe`" up' manually and complete the browser login -- this can't be automated (needs your Tailscale/Google/GitHub account)."
+        Write-Host "  After logging in, re-run this script to continue setup."
+    } else {
+        Write-Ok "Tailscale is connected."
+        $tsIP = (& $tailscaleExe ip -4 2>&1)
+        Write-Host "  This machine's Tailscale IP: $tsIP"
+        Write-Host "  (The other laptop will use this IP to reach this machine.)"
+    }
 }
 
 # --- Step 3: WSL2 mirrored networking mode ---

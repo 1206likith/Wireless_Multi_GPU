@@ -4,3 +4,4 @@ coordinator/tokens/
 coordinator/*.secret
 coordinator/status.json
 coordinator/test_status.json
+coordinator/*.log
