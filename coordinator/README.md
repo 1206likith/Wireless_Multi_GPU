@@ -34,6 +34,16 @@ On the one "main" machine:
 python coordinator/coordinator.py status                                   # one-shot poll -> coordinator/status.json
 python coordinator/coordinator.py watch --interval 10                       # poll continuously
 python coordinator/coordinator.py dispatch job-specs/yolo-detect-v4-ddp.yaml # dispatch a real job
+
+# Remote command execution -- see SECURITY MODEL below before using this.
+python coordinator/coordinator.py health                                    # report problems, fix nothing
+python coordinator/coordinator.py exec second-laptop "df -h"                # run any shell command remotely
+python coordinator/coordinator.py exec --all "git pull"                     # ...on every configured worker
+
+# Push a dataset directory from THIS machine to a worker over HTTP.
+python coordinator/coordinator.py send-dataset second-laptop data/yolo_detect_v4 \
+    --advertise-host 100.x.y.z   # THIS machine's own Tailscale IP -- required,
+                                  # get it with `tailscale ip -4`
 ```
 
 `status.json`'s shape mirrors `dashboard/index.html`'s hardcoded example
@@ -70,6 +80,38 @@ check that only verified "this file exists in the repo" rather than "this
 file is one we actually reviewed for this," and an env-var merge that
 would have let dispatch-time data smuggle in effective code execution.
 
+### /exec and /dataset-pull — a deliberate exception to the above
+
+`POST /exec` runs an ARBITRARY shell command sent by the coordinator on
+the target worker, with no allowlist. This is a deliberate scope
+expansion beyond the no-arbitrary-remote-execution design above, added
+at the user's explicit request after the tradeoff was spelled out and
+confirmed: **if the main laptop or its dispatch tokens are ever
+compromised, that gives an attacker code execution on every connected
+worker, not just one.** This is accepted as reasonable for a personal
+2-3 laptop hobby cluster; it would NOT be reasonable for anything
+shared/production. Kept as safe as a fundamentally unsafe feature can
+be:
+- Same bearer-token auth as `/dispatch`.
+- Every command is logged to `coordinator/worker_exec.log` on the
+  WORKER (not just the coordinator) before the response is sent, so
+  there's always a local record even if the response never arrives.
+- A hard 300s timeout so a bad command can't hang the worker forever.
+- One command at a time per worker (a lock, not a queue) so two remote
+  fixes can't race each other.
+
+`POST /dataset-pull` is narrower in principle (it only ever runs a
+fetch, not arbitrary code) but still worth knowing about: it recursively
+downloads a directory listing via pure-Python `urllib` (no external
+`wget`/`curl` dependency — an earlier version shelled out to `wget`,
+which silently failed on native Windows where `wget` is only a
+PowerShell alias, not a real executable `subprocess.run` can find; found
+by testing, not review). `dest` is validated to stay inside the repo
+root the same way `entry_point` is.
+
+**Protect the main laptop and its worker tokens like root credentials
+to the entire cluster** — that is genuinely what they are now.
+
 ## What's NOT built (honest gaps)
 
 - **No auto-discovery.** `workers.yaml` is hand-edited. Fine for 2-3
@@ -88,11 +130,28 @@ would have let dispatch-time data smuggle in effective code execution.
   loopback-only binding for anything not yet on Tailscale.
 - **Single coordinator, no HA.** If the coordinator's machine is off,
   nothing dispatches or polls. Acceptable for a 2-laptop hobby cluster.
-- **Not yet tested cross-machine.** Everything above is verified via
-  `test_e2e.py` on loopback only (no second laptop available at build
-  time). The worker list in `workers.yaml` needs a real Tailscale IP
-  substituted in for the second laptop, and that path is unverified
-  until Layer 1 is proven end-to-end.
+- **Cross-machine status polling and remote exec ARE proven** (a real
+  second laptop, over its real Tailscale IP, has successfully been
+  polled via `/status` and driven via `/exec`/`/dataset-pull`) — but
+  `test_e2e.py` itself still only runs on loopback (no second machine
+  available in CI/automated test runs), so it can't catch a real
+  cross-machine regression on its own. The real DDP training job has
+  been run across two machines manually via `torchrun` inside WSL2, NOT
+  yet through `coordinator.py dispatch` — `worker_daemon.py` launches
+  subprocesses with `sys.executable`, which is native-Windows Python on
+  a Windows host, not WSL2's NCCL-enabled Python. Dispatching the actual
+  DDP job spec through the coordinator needs either a WSL2-aware launch
+  path in `worker_daemon.py` or a separate WSL2-native daemon instance —
+  not yet built (see memory/multi_gpu_multi_laptop_project.md's
+  "Layer 2 WSL2 gap" note).
+- **Auto-fix scope is intentionally narrow.** `coordinator.py heal`
+  currently mirrors `health`'s findings rather than actually fixing
+  anything automatically — see `cmd_heal`'s own docstring for exactly
+  why each problem class hit this session (Tailscale account mismatches,
+  admin-elevation-gated firewall rules, PyTorch version drift) needs a
+  human at the keyboard rather than a script pretending otherwise. What
+  `/exec` DOES let you do is run the fix yourself remotely instead of
+  physically walking to the other laptop.
 
 ## Testing
 

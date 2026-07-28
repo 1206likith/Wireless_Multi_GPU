@@ -142,6 +142,77 @@ def main():
                 fail(f"expected 401 for unauthenticated /dispatch, got {exc.code}")
             print("OK: unauthenticated dispatch correctly rejected with HTTP 401")
 
+        # /exec: run a real command on the worker and check its output.
+        status_code, resp = coord.exec_on_worker(worker, "echo exec-test-marker")
+        if status_code != 200:
+            fail(f"exec did not return 200, got {status_code}: {resp}")
+        if "exec-test-marker" not in resp.get("stdout", ""):
+            fail(f"exec output missing expected marker: {resp}")
+        print(f"OK: /exec ran a real command, stdout contained the expected marker")
+
+        # /exec: unauthenticated request rejected (same pattern as /dispatch).
+        exec_url = f"http://127.0.0.1:{PORT}/exec"
+        bad_exec_req = urllib.request.Request(
+            exec_url, data=json.dumps({"command": "echo should-not-run"}).encode("utf-8"),
+            headers={"Content-Type": "application/json"}, method="POST",
+        )
+        try:
+            urllib.request.urlopen(bad_exec_req, timeout=5)
+            fail("expected 401 for an unauthenticated /exec request, got success")
+        except urllib.error.HTTPError as exc:
+            if exc.code != 401:
+                fail(f"expected 401 for unauthenticated /exec, got {exc.code}")
+            print("OK: unauthenticated /exec correctly rejected with HTTP 401")
+
+        # /dataset-pull: serve a small real directory and fetch it via the
+        # worker, into a scratch destination, then verify content landed.
+        import shutil as _shutil
+        import http.server as _http_server
+        import socketserver as _socketserver
+        import threading as _threading
+
+        src_dir = Path(tempfile.mkdtemp(prefix="mgpu-test-src-"))
+        (src_dir / "sub").mkdir()
+        (src_dir / "a.txt").write_text("alpha")
+        (src_dir / "sub" / "b.txt").write_text("beta")
+
+        class _Handler(_http_server.SimpleHTTPRequestHandler):
+            def __init__(self, *a, **kw):
+                super().__init__(*a, directory=str(src_dir), **kw)
+            def log_message(self, *a):
+                pass
+
+        file_server = _socketserver.TCPServer(("127.0.0.1", 0), _Handler)
+        file_server_port = file_server.server_address[1]
+        file_server_thread = _threading.Thread(target=file_server.serve_forever, daemon=True)
+        file_server_thread.start()
+        try:
+            dest_rel = "coordinator/_test_dataset_pull_scratch"
+            dest_abs = REPO_ROOT / dest_rel
+            _shutil.rmtree(dest_abs, ignore_errors=True)
+            status_code, resp = coord.request_dataset_pull(
+                worker, f"http://127.0.0.1:{file_server_port}/", dest_rel,
+            )
+            if status_code != 200:
+                fail(f"dataset-pull did not return 200, got {status_code}: {resp}")
+            if resp.get("files_written") != 2:
+                fail(f"expected 2 files written, got: {resp}")
+            if not (dest_abs / "a.txt").read_text() == "alpha" or not (dest_abs / "sub" / "b.txt").read_text() == "beta":
+                fail(f"dataset-pull wrote wrong content into {dest_abs}")
+            print(f"OK: /dataset-pull fetched a real 2-file directory with correct content")
+
+            # path traversal on dest must be refused.
+            code, resp2 = coord.request_dataset_pull(
+                worker, f"http://127.0.0.1:{file_server_port}/", "../outside_repo_scratch",
+            )
+            if code != 403:
+                fail(f"expected 403 for a path-escaping dataset-pull dest, got {code}: {resp2}")
+            print("OK: path-escaping dataset-pull dest correctly rejected with HTTP 403")
+        finally:
+            file_server.shutdown()
+            _shutil.rmtree(src_dir, ignore_errors=True)
+            _shutil.rmtree(dest_abs, ignore_errors=True)
+
         print("\nE2E TEST PASSED")
     finally:
         daemon.terminate()
