@@ -138,7 +138,32 @@ class _DirListingParser(HTMLParser):
                     self.hrefs.append(value)
 
 
-def _recursive_http_fetch(base_url, dest_dir, _depth=0):
+def _safe_join(dest_dir, name, dest_root_real):
+    """Resolve dest_dir/name and verify it stays inside dest_root_real.
+    SECURITY: a security review correctly flagged path traversal /
+    arbitrary file write here. `name` comes from a REMOTE HTTP server's
+    directory-listing response (an href attribute) -- _handle_dataset_pull
+    accepts any URL in its POST body, so the content of that listing is
+    NOT trustworthy by construction. The prior code extracted a "filename"
+    via `href.rstrip('/').rsplit('/', 1)[-1]` BEFORE url-decoding, which
+    looks safe (a literal '../foo' collapses to 'foo') but percent-encoded
+    traversal sequences survive that split untouched and only become real
+    '../' after urllib.parse.unquote() runs afterward -- confirmed
+    exploitable: an href of '..%2f..%2f..%2fevil.txt' decodes to
+    '../../../evil.txt' AFTER the split, escaping dest_dir entirely, which
+    would let a malicious or compromised dataset-server URL write files
+    anywhere the worker process has permission to write. Raises ValueError
+    if the resolved path would escape dest_root_real; caller must not
+    proceed with the write on that exception."""
+    candidate = Path(os.path.realpath(dest_dir / name))
+    try:
+        candidate.relative_to(dest_root_real)
+    except ValueError:
+        raise ValueError(f"entry {name!r} resolves outside the dataset destination root — refused")
+    return candidate
+
+
+def _recursive_http_fetch(base_url, dest_dir, _depth=0, _dest_root_real=None):
     """Recursively downloads every file under an http.server-style
     directory listing at base_url into dest_dir. Pure Python (urllib +
     html.parser), no external binary dependency -- see _handle_dataset_pull
@@ -147,6 +172,8 @@ def _recursive_http_fetch(base_url, dest_dir, _depth=0):
     executable). Returns (files_written, bytes_written)."""
     if _depth > 10:
         raise RuntimeError("directory nesting exceeded 10 levels -- possible listing loop, aborting")
+    if _dest_root_real is None:
+        _dest_root_real = Path(os.path.realpath(dest_dir))
 
     with urllib.request.urlopen(base_url, timeout=30) as resp:
         html_text = resp.read().decode("utf-8", errors="replace")
@@ -161,14 +188,16 @@ def _recursive_http_fetch(base_url, dest_dir, _depth=0):
             continue
         child_url = urllib.parse.urljoin(base_url, href)
         name = urllib.parse.unquote(href.rstrip("/").rsplit("/", 1)[-1])
+        if not name:
+            continue
         if href.endswith("/"):
-            sub_dest = dest_dir / name
+            sub_dest = _safe_join(dest_dir, name, _dest_root_real)
             sub_dest.mkdir(parents=True, exist_ok=True)
-            f, b = _recursive_http_fetch(child_url, sub_dest, _depth + 1)
+            f, b = _recursive_http_fetch(child_url, sub_dest, _depth + 1, _dest_root_real)
             files_written += f
             bytes_written += b
         else:
-            dest_file = dest_dir / name
+            dest_file = _safe_join(dest_dir, name, _dest_root_real)
             with urllib.request.urlopen(child_url, timeout=60) as file_resp:
                 data = file_resp.read()
             dest_file.write_bytes(data)

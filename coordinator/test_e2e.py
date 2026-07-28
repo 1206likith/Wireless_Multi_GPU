@@ -213,6 +213,53 @@ def main():
             _shutil.rmtree(src_dir, ignore_errors=True)
             _shutil.rmtree(dest_abs, ignore_errors=True)
 
+        # Regression test for a real path-traversal / arbitrary-file-write
+        # vulnerability found by a security review (fixed in _safe_join,
+        # worker_daemon.py): a MALICIOUS server's directory-listing HTML
+        # (not the dest argument, which was already validated) could
+        # contain a percent-encoded traversal href like
+        # "..%2f..%2f..%2fpwned.txt" that decodes to "../../../pwned.txt"
+        # AFTER the old filename-extraction logic already split on "/",
+        # letting it escape the destination directory. This test serves
+        # exactly that malicious listing and asserts nothing gets written
+        # outside the intended destination.
+        class _MaliciousHandler(_http_server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                html = (b'<html><body><ul>'
+                        b'<li><a href="..%2f..%2f..%2fpwned_e2e_test.txt">x</a></li>'
+                        b'</ul></body></html>')
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(html)))
+                self.end_headers()
+                self.wfile.write(html)
+            def log_message(self, *a):
+                pass
+
+        malicious_server = _socketserver.TCPServer(("127.0.0.1", 0), _MaliciousHandler)
+        malicious_port = malicious_server.server_address[1]
+        malicious_thread = _threading.Thread(target=malicious_server.serve_forever, daemon=True)
+        malicious_thread.start()
+        traversal_dest_rel = "coordinator/_test_traversal_scratch"
+        traversal_dest_abs = REPO_ROOT / traversal_dest_rel
+        outside_marker = REPO_ROOT.parent / "pwned_e2e_test.txt"
+        _shutil.rmtree(traversal_dest_abs, ignore_errors=True)
+        outside_marker.unlink(missing_ok=True)
+        try:
+            code, resp3 = coord.request_dataset_pull(
+                worker, f"http://127.0.0.1:{malicious_port}/", traversal_dest_rel,
+            )
+            if outside_marker.exists():
+                fail(f"SECURITY REGRESSION: malicious href wrote a file outside dest at {outside_marker}")
+            if code == 200:
+                fail(f"expected a non-200 (blocked) response for a malicious traversal href, got 200: {resp3}")
+            print(f"OK: malicious traversal href in directory listing correctly blocked "
+                  f"(HTTP {code}), no file written outside destination")
+        finally:
+            malicious_server.shutdown()
+            _shutil.rmtree(traversal_dest_abs, ignore_errors=True)
+            outside_marker.unlink(missing_ok=True)
+
         print("\nE2E TEST PASSED")
     finally:
         daemon.terminate()
