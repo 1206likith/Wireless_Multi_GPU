@@ -13,8 +13,12 @@ requires:
   python_env: yolo_ddp_env
 
 roles:
-  rank_assignment: manual  # current state: still hand-launched with --node_rank per machine, see DDP_MULTINODE_SETUP.md. Becomes coordinator-assigned once Layer 2 exists.
+  rank_assignment: coordinator-assigned  # coordinator.py dispatch computes rank 0..N-1 from workers.yaml order
+
+runtime: wsl2  # worker_daemon.py launches this via `wsl.exe -d <distro> -- bash -lc "... torchrun ..."`,
+               # not sys.executable directly -- native Windows PyTorch has no NCCL backend at all
+               # (see the entry_point script's docstring). See WSL2_ENTRY_POINTS in worker_daemon.py.
 
 env:
-  PER_GPU_BATCH: "{auto}"   # placeholder for coordinator-computed value; manual runs set this by hand today
+  PER_GPU_BATCH: "{auto}"   # placeholder for coordinator-computed value
   MASTER_PORT: "29500"

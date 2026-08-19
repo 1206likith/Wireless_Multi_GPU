@@ -133,17 +133,24 @@ to the entire cluster** — that is genuinely what they are now.
 - **Cross-machine status polling and remote exec ARE proven** (a real
   second laptop, over its real Tailscale IP, has successfully been
   polled via `/status` and driven via `/exec`/`/dataset-pull`) — but
-  `test_e2e.py` itself still only runs on loopback (no second machine
-  available in CI/automated test runs), so it can't catch a real
-  cross-machine regression on its own. The real DDP training job has
-  been run across two machines manually via `torchrun` inside WSL2, NOT
-  yet through `coordinator.py dispatch` — `worker_daemon.py` launches
-  subprocesses with `sys.executable`, which is native-Windows Python on
-  a Windows host, not WSL2's NCCL-enabled Python. Dispatching the actual
-  DDP job spec through the coordinator needs either a WSL2-aware launch
-  path in `worker_daemon.py` or a separate WSL2-native daemon instance —
-  not yet built (see memory/multi_gpu_multi_laptop_project.md's
-  "Layer 2 WSL2 gap" note).
+  `test_e2e.py` itself still only runs the security/auth checks on
+  loopback (no second machine available in CI/automated test runs), so
+  it can't catch a real cross-machine regression on its own.
+- **WSL2 dispatch gap: CLOSED.** `worker_daemon.py` now detects
+  WSL2-only entry_points (`WSL2_ENTRY_POINTS`, currently
+  `36b_train_yolo_v4_ddp_wsl2.py`) and launches them via
+  `wsl.exe -d <distro> -- bash -lc "source venv && torchrun ..."`
+  instead of `sys.executable` directly — see `build_launch_argv()`.
+  Verified end-to-end on this laptop: a real `/dispatch` HTTP call
+  launched `wsl.exe`, which ran `torchrun` inside WSL2's Ubuntu venv,
+  which initialized and destroyed a real NCCL process group, exit
+  code 0. This is now a permanent regression test in `test_e2e.py`
+  (skips gracefully on a machine without WSL2/Ubuntu-24.04 set up).
+  **Not yet proven cross-machine** — the smoke test is single-node
+  (world_size=1, this laptop only); dispatching the real multi-hour
+  YOLO DDP job across both laptops through the coordinator is the
+  remaining unverified step, blocked on the second laptop's
+  worker_daemon.py actually being reachable (see below).
 - **Auto-fix scope is intentionally narrow.** `coordinator.py heal`
   currently mirrors `health`'s findings rather than actually fixing
   anything automatically — see `cmd_heal`'s own docstring for exactly

@@ -39,6 +39,13 @@ roles:
   # worker is rank 0 (master) and the rest are ranks 1..N-1.
   rank_assignment: coordinator-assigned  # vs. "manual" for the old 2-laptop-by-hand flow
 
+runtime: wsl2  # optional, defaults to native. "wsl2" means worker_daemon.py must launch this
+               # entry_point inside WSL2 via torchrun (NCCL is only available there, not on
+               # native Windows PyTorch). The actual launch-strategy decision lives in
+               # worker_daemon.py's WSL2_ENTRY_POINTS set (a reviewed allowlist, same reasoning
+               # as ALLOWED_ENTRY_POINTS) -- this field documents intent, it does not by itself
+               # change what the daemon does; a new WSL2 script needs adding to that set too.
+
 env:
   # Environment variables the entry_point script expects, with the
   # coordinator filling in machine-specific values (IP, rank, etc) at

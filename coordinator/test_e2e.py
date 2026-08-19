@@ -15,6 +15,7 @@ Run with: python coordinator/test_e2e.py
 Exits 0 and prints "E2E TEST PASSED" on success, non-zero otherwise.
 """
 import secrets
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -30,6 +31,18 @@ STATUS_OUT = COORDINATOR_DIR / "test_status.json"
 def fail(msg):
     print(f"E2E TEST FAILED: {msg}", file=sys.stderr)
     sys.exit(1)
+
+
+def _which(exe):
+    return shutil.which(exe)
+
+
+def wd_module():
+    """worker_daemon module, already imported into sys.modules by the time
+    the WSL2-dispatch check runs (main() imports coordinator, which is
+    separate, so this does its own small import here)."""
+    import importlib
+    return importlib.import_module("worker_daemon")
 
 
 def main():
@@ -109,6 +122,44 @@ def main():
         assert dashboard_status["jobs"][0]["name"] == "test-noop"
         assert dashboard_status["jobs"][0]["status"] == "done"
         print(f"OK: dashboard-shaped status.json written to {STATUS_OUT}")
+
+        # WSL2 dispatch path: proves build_launch_argv's wsl.exe -> bash ->
+        # torchrun branch (worker_daemon.py) actually launches and NCCL
+        # process-group init/destroy succeeds, single-node (world_size=1),
+        # dispatched through the real HTTP /dispatch endpoint -- not just
+        # a unit test of the argv string. Run AFTER the dashboard-status
+        # assertion above (not before) since this worker only tracks one
+        # job at a time and would otherwise overwrite the "test-noop"
+        # job name that assertion checks for. Skips (not fails) if this
+        # machine has no WSL2/Ubuntu-24.04/yolo_ddp_env, since a fresh
+        # clone or CI runner won't have that set up.
+        wsl_available = subprocess.run(
+            ["wsl.exe", "-d", wd_module().WSL2_DISTRO, "--", "bash", "-lc",
+             f"test -d {wd_module().WSL2_VENV}"],
+            capture_output=True, timeout=15,
+        ).returncode == 0 if _which("wsl.exe") or _which("wsl") else False
+
+        if wsl_available:
+            wsl_spec_yaml = "name: wsl2-smoke\nentry_point: coordinator/test_noop_job_wsl2.py\n"
+            status_code, resp = coord.dispatch_job(
+                worker, wsl_spec_yaml, yaml.safe_load(wsl_spec_yaml),
+                rank=0, world_size=1, master_addr="127.0.0.1", master_port="29599",
+            )
+            if status_code != 202:
+                fail(f"WSL2 dispatch did not return 202, got {status_code}: {resp}")
+            for _ in range(90):
+                status = coord.poll_worker(worker)
+                job_status = status.get("job", {}).get("status")
+                if job_status == "done":
+                    break
+                time.sleep(1)
+            else:
+                fail(f"WSL2 job never reached 'done' status, last seen: {status}")
+            if status["job"].get("exit_code") != 0:
+                fail(f"WSL2 job did not exit 0: {status['job']}")
+            print("OK: WSL2-dispatched job (real torchrun + NCCL init/destroy) completed cleanly")
+        else:
+            print("SKIP: WSL2 dispatch check (no WSL2/Ubuntu-24.04/yolo_ddp_env on this machine)")
 
         # Bonus: reject-on-bad-entry_point check (security constraint) --
         # rejected both because it's a path escape AND because it's not in

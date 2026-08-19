@@ -367,40 +367,14 @@
     </div>
   </header>
 
-  <div class="scaffold-notice">
+  <div class="scaffold-notice" id="statusNotice">
     <span class="dot"></span>
-    Scaffold shell — machine cards below are illustrative. Wires up to real data once the Layer 2 coordinator exists.
+    <span id="statusNoticeText">Loading status.json&hellip;</span>
   </div>
 
   <section>
     <h2>Machines</h2>
-    <div class="machine-grid">
-      <div class="machine-card">
-        <div class="machine-card-head">
-          <div>
-            <div class="machine-name">This laptop</div>
-            <div class="machine-host">RTX 5060 · 172.16.201.52</div>
-          </div>
-          <span class="status-pill busy"><span class="dot"></span>Training</span>
-        </div>
-        <div class="stat-row">
-          <span class="k">GPU util</span>
-          <span class="v">61%<span class="meter"><span style="width: 61%;"></span></span></span>
-        </div>
-        <div class="stat-row">
-          <span class="k">VRAM</span>
-          <span class="v">2.1 / 8.0 GB</span>
-        </div>
-        <div class="stat-row">
-          <span class="k">Current job</span>
-          <span class="v">unet-v2-seg</span>
-        </div>
-      </div>
-
-      <div class="machine-card is-placeholder">
-        Second laptop — not yet connected
-      </div>
-    </div>
+    <div class="machine-grid" id="machineGrid"></div>
   </section>
 
   <section>
@@ -411,46 +385,105 @@
           <tr>
             <th>Job</th>
             <th>Machine</th>
-            <th>Metric</th>
-            <th>Progress</th>
+            <th>Rank</th>
             <th>Status</th>
+            <th>Exit code</th>
           </tr>
         </thead>
-        <tbody>
-          <tr>
-            <td>
-              <div class="job-name">unet-v2-seg</div>
-              <div class="job-meta">segmentation · efficientnet-b4</div>
-            </td>
-            <td>This laptop</td>
-            <td class="metric-val">mIoU 0.688</td>
-            <td class="progress-cell">
-              <div class="progress-track"><span style="width: 72%;"></span></div>
-              <div class="progress-label">epoch 57 / 80</div>
-            </td>
-            <td><span class="status-pill busy"><span class="dot"></span>Running</span></td>
-          </tr>
-          <tr>
-            <td>
-              <div class="job-name">yolo-detect-v4-cbam</div>
-              <div class="job-meta">detection · yolov8s + CBAM</div>
-            </td>
-            <td>—</td>
-            <td class="metric-val">—</td>
-            <td class="progress-cell">
-              <div class="progress-track"><span style="width: 0%; background: var(--text-faint);"></span></div>
-              <div class="progress-label">queued</div>
-            </td>
-            <td><span class="status-pill" style="background: var(--panel-raised); color: var(--text-faint);"><span class="dot" style="background: var(--text-faint);"></span>Parked</span></td>
-          </tr>
+        <tbody id="jobTableBody">
+          <tr><td colspan="5" style="color: var(--text-faint);">No jobs reported yet.</td></tr>
         </tbody>
       </table>
     </div>
   </section>
 
-  <footer>
-    Layer 4 scaffold — static shell, no live backend yet. Once Layer 2's
-    coordinator exists, this reads from <code>job-specs/</code> and each
-    worker's reported status instead of the hardcoded rows above.
+  <footer id="footerNote">
+    Reads <code>coordinator/status.json</code>, written by
+    <code>coordinator.py status</code> or <code>watch</code>. Refreshes every 10s.
   </footer>
 </div>
+
+<script>
+  const STATUS_URL = "../coordinator/status.json";
+  const POLL_INTERVAL_MS = 10000;
+
+  function fmtAgo(unixSeconds) {
+    if (!unixSeconds) return "—";
+    const deltaS = Math.max(0, Date.now() / 1000 - unixSeconds);
+    if (deltaS < 60) return `${Math.floor(deltaS)}s ago`;
+    if (deltaS < 3600) return `${Math.floor(deltaS / 60)}m ago`;
+    return `${Math.floor(deltaS / 3600)}h ago`;
+  }
+
+  function machineCard(m) {
+    const pillClass = m.status === "busy" ? "busy" : m.status === "online" ? "online" : "offline";
+    const pillLabel = m.status === "busy" ? "Training" : m.status === "online" ? "Online" : "Offline";
+    if (m.status === "offline") {
+      return `<div class="machine-card is-placeholder">${m.name} — unreachable</div>`;
+    }
+    const gpuRows = (m.gpus && m.gpus.length ? m.gpus : []).map(g => {
+      const usedGb = (g.vram_used_mb / 1024).toFixed(1);
+      const totalGb = (g.vram_total_mb / 1024).toFixed(1);
+      const pct = g.vram_total_mb ? Math.round((g.vram_used_mb / g.vram_total_mb) * 100) : 0;
+      return `<div class="stat-row"><span class="k">${g.name}</span>
+        <span class="v">${usedGb} / ${totalGb} GB<span class="meter"><span style="width:${pct}%;"></span></span></span></div>`;
+    }).join("");
+    return `<div class="machine-card">
+      <div class="machine-card-head">
+        <div>
+          <div class="machine-name">${m.name}</div>
+          <div class="machine-host">${m.hostname || ""} · ${m.host}</div>
+        </div>
+        <span class="status-pill ${pillClass}"><span class="dot"></span>${pillLabel}</span>
+      </div>
+      ${gpuRows}
+      <div class="stat-row">
+        <span class="k">Current job</span>
+        <span class="v">${m.current_job || "idle"}</span>
+      </div>
+    </div>`;
+  }
+
+  function jobRow(j) {
+    return `<tr>
+      <td><div class="job-name">${j.name}</div></td>
+      <td>${j.machine}</td>
+      <td class="metric-val">${j.rank ?? "—"} / ${j.world_size ?? "—"}</td>
+      <td><span class="status-pill ${j.status === "running" ? "busy" : j.status === "done" ? "online" : "offline"}"><span class="dot"></span>${j.status}</span></td>
+      <td class="metric-val">${j.exit_code ?? "—"}</td>
+    </tr>`;
+  }
+
+  async function refresh() {
+    const notice = document.getElementById("statusNotice");
+    const noticeText = document.getElementById("statusNoticeText");
+    try {
+      const resp = await fetch(STATUS_URL, { cache: "no-store" });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+
+      document.querySelector(".cluster-stat").innerHTML = `
+        <div class="stat"><span class="num">${data.cluster.machines_online}<span style="color: var(--text-faint);">/${data.cluster.machines_total}</span></span><span class="label">Machines online</span></div>
+        <div class="stat"><span class="num">${data.cluster.jobs_running}</span><span class="label">Jobs running</span></div>
+        <div class="stat"><span class="num">${data.cluster.total_vram_gb}</span><span class="label">GB VRAM total</span></div>
+      `;
+
+      document.getElementById("machineGrid").innerHTML = data.machines.map(machineCard).join("");
+
+      const jobBody = document.getElementById("jobTableBody");
+      jobBody.innerHTML = data.jobs.length
+        ? data.jobs.map(jobRow).join("")
+        : `<tr><td colspan="5" style="color: var(--text-faint);">No jobs reported yet.</td></tr>`;
+
+      notice.style.display = "none";
+      document.getElementById("footerNote").innerHTML =
+        `Reads <code>coordinator/status.json</code>. Last updated ${fmtAgo(data.generated_at)}.`;
+    } catch (err) {
+      notice.style.display = "flex";
+      noticeText.textContent = `Could not load status.json (${err.message}). Run "python coordinator/coordinator.py watch" on the coordinator machine.`;
+    }
+  }
+
+  refresh();
+  setInterval(refresh, POLL_INTERVAL_MS);
+</script>

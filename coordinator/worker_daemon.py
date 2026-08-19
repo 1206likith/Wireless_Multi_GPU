@@ -82,7 +82,36 @@ DEFAULT_PORT = 8770  # arbitrary, unlikely to collide with anything training-rel
 ALLOWED_ENTRY_POINTS = {
     "scripts/36b_train_yolo_v4_ddp_wsl2.py",
     "coordinator/test_noop_job.py",  # trivial local test job, see test_e2e.py
+    "coordinator/test_noop_job_wsl2.py",  # WSL2-dispatch smoke test, see that file's docstring
 }
+
+# entry_points that must be launched inside WSL2 via torchrun rather than
+# with sys.executable directly. sys.executable is native Windows Python,
+# which has no NCCL backend at all (see 36b_..._wsl2.py's docstring) -- a
+# job spec targeting this script CANNOT run as a plain subprocess launch;
+# it has to cross into the WSL2 Linux environment where NCCL is actually
+# available. Kept as an explicit set (not spec-driven) for the same reason
+# ALLOWED_ENTRY_POINTS is a fixed set: which launch strategy applies to a
+# script is a reviewed decision, not something a job spec should toggle.
+WSL2_ENTRY_POINTS = {
+    "scripts/36b_train_yolo_v4_ddp_wsl2.py",
+    "coordinator/test_noop_job_wsl2.py",
+}
+WSL2_DISTRO = os.environ.get("MULTIGPU_WSL_DISTRO", "Ubuntu-24.04")
+WSL2_VENV = os.environ.get("MULTIGPU_WSL_VENV", "~/yolo_ddp_env")
+WSL2_NPROC_PER_NODE = 1  # one GPU per machine in this cluster
+
+
+def _windows_path_to_wsl(win_path):
+    """Translate an absolute Windows path (e.g. L:\\Likith\\...) to its
+    WSL2 mount equivalent (/mnt/l/Likith/...) -- confirmed this is how
+    this machine's WSL2 actually reaches the repo (see
+    36b_train_yolo_v4_ddp_wsl2.py's DATA_ROOT docstring: "/mnt/l/..." is
+    the real, tested mount path, not assumed from docs)."""
+    resolved = Path(win_path).resolve()
+    drive = resolved.drive.rstrip(":").lower()
+    rest = "/".join(resolved.parts[1:])
+    return f"/mnt/{drive}/{rest}"
 
 # Job-spec / coordinator-assigned env keys this daemon will actually pass
 # through to the subprocess. Anything else is dropped, not merged --
@@ -274,6 +303,56 @@ def get_gpu_info():
                 "vram_used_mb": int(float(used)),
             })
     return gpus
+
+
+def build_launch_argv(entry_point_str, script_path, env, rank, world_size, local_rank):
+    """Returns the subprocess argv to actually launch this job with.
+
+    Two cases:
+      - entry_point in WSL2_ENTRY_POINTS: this script needs NCCL, which
+        only exists in this machine's WSL2 PyTorch build (native Windows
+        PyTorch has no NCCL backend at all -- root-caused earlier this
+        session, see 36b_..._wsl2.py's docstring). Launch via
+        `wsl.exe -d <distro> -- bash -lc "source venv && torchrun ..."`,
+        NOT sys.executable, which would just run the script under native
+        Windows Python and hit the same missing-NCCL wall again.
+        Uses torchrun (not a bare python invocation) because that's what
+        actually works for rendezvous inside WSL2's PyTorch build --
+        confirmed in this session, see the script's own LAUNCH section.
+        torchrun sets RANK/WORLD_SIZE/LOCAL_RANK/MASTER_ADDR/MASTER_PORT
+        itself from its own flags, so this passes them as torchrun flags
+        rather than env vars (the script also reads them from env as a
+        fallback, so this is consistent either way).
+      - anything else: unchanged, sys.executable direct launch (this is
+        the path coordinator/test_noop_job.py uses, and is intentionally
+        simple since that job has no GPU/NCCL requirement at all).
+    """
+    if entry_point_str not in WSL2_ENTRY_POINTS:
+        return [sys.executable, str(script_path)]
+
+    wsl_repo_root = _windows_path_to_wsl(REPO_ROOT)
+    wsl_script_rel = entry_point_str  # already relative, forward-slashed
+    master_addr = env.get("MASTER_ADDR", "127.0.0.1")
+    master_port = env.get("MASTER_PORT", "29500")
+    per_gpu_batch = env.get("PER_GPU_BATCH")
+    data_root = env.get("DATA_ROOT")
+
+    env_prefix = ""
+    if per_gpu_batch:
+        env_prefix += f"PER_GPU_BATCH={per_gpu_batch} "
+    if data_root:
+        env_prefix += f"DATA_ROOT={data_root} "
+
+    inner_cmd = (
+        f"source {WSL2_VENV}/bin/activate && "
+        f"cd {wsl_repo_root} && "
+        f"{env_prefix}torchrun --nnodes={world_size} --node_rank={rank} "
+        f"--nproc_per_node={WSL2_NPROC_PER_NODE} "
+        f"--master_addr={master_addr} --master_port={master_port} "
+        f"{wsl_script_rel}"
+    )
+    wsl_exe = shutil.which("wsl") or r"C:\Windows\System32\wsl.exe"
+    return [wsl_exe, "-d", WSL2_DISTRO, "--", "bash", "-lc", inner_cmd]
 
 
 class JobState:
@@ -590,7 +669,8 @@ class Handler(BaseHTTPRequestHandler):
         if master_port:
             env["MASTER_PORT"] = str(master_port)
 
-        argv = [sys.executable, str(script_path)]
+        argv = build_launch_argv(entry_point, script_path, env, rank, world_size,
+                                  payload.get("local_rank", 0))
         ok, err = JOB.try_start(spec.get("name", entry_point), argv, env, rank, world_size)
         if not ok:
             self._send_json(409, {"error": err})
