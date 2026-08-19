@@ -340,6 +340,102 @@
     font-size: 11.5px;
   }
 
+  /* ---- Actions panel ---- */
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+  }
+
+  .field-row {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+  }
+
+  .field-row:last-child { margin-bottom: 0; }
+
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 1;
+    min-width: 160px;
+  }
+
+  .field label {
+    font-size: 11px;
+    color: var(--text-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .field input, .field select {
+    background: var(--panel-raised);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    padding: 7px 10px;
+    font-size: 13px;
+    font-family: var(--font-body);
+  }
+
+  .field input[type="password"], .field input[type="text"] { font-family: var(--font-mono); }
+
+  button.action {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    align-self: flex-end;
+    white-space: nowrap;
+  }
+
+  button.action:hover { filter: brightness(1.08); }
+  button.action:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  button.action.danger { background: var(--bad); }
+
+  .action-group {
+    border-top: 1px solid var(--border);
+    padding-top: 14px;
+    margin-top: 14px;
+  }
+
+  .action-group:first-child { border-top: none; padding-top: 0; margin-top: 0; }
+
+  .action-group h3 {
+    font-size: 12px;
+    font-weight: 650;
+    margin: 0 0 10px;
+    color: var(--text-muted);
+  }
+
+  .action-result {
+    margin-top: 10px;
+    background: var(--panel-raised);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 220px;
+    overflow-y: auto;
+    display: none;
+  }
+
+  .action-result.show { display: block; }
+  .action-result.ok { border-color: color-mix(in srgb, var(--good) 40%, var(--border)); }
+  .action-result.err { border-color: color-mix(in srgb, var(--bad) 40%, var(--border)); color: var(--bad); }
+
   @media (prefers-reduced-motion: reduce) {
     * { transition: none !important; }
   }
@@ -397,15 +493,184 @@
     </div>
   </section>
 
+  <section>
+    <h2>Control API</h2>
+    <div class="panel">
+      <div class="field-row">
+        <div class="field">
+          <label for="apiBase">API base URL</label>
+          <input type="text" id="apiBase" placeholder="http://127.0.0.1:8790">
+        </div>
+        <div class="field">
+          <label for="apiToken">Bearer token</label>
+          <input type="password" id="apiToken" placeholder="control_api_token.secret contents">
+        </div>
+        <button class="action" id="saveConfigBtn" type="button">Save</button>
+      </div>
+      <div style="font-size: 11.5px; color: var(--text-faint);">
+        Stored only in this browser's <code>localStorage</code> — never sent anywhere but the API base URL above.
+        Start the API with <code>python coordinator/control_api.py</code> on the coordinator machine.
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Actions</h2>
+    <div class="panel">
+      <div class="action-group">
+        <h3>Dispatch a job</h3>
+        <div class="field-row">
+          <div class="field">
+            <label for="dispatchJobSpec">Job spec name (job-specs/&lt;name&gt;.yaml)</label>
+            <input type="text" id="dispatchJobSpec" placeholder="yolo-detect-v4-ddp">
+          </div>
+          <button class="action" id="dispatchBtn" type="button">Dispatch</button>
+        </div>
+        <div class="action-result" id="dispatchResult"></div>
+      </div>
+
+      <div class="action-group">
+        <h3>Run a command (remote exec)</h3>
+        <div class="field-row">
+          <div class="field">
+            <label for="execWorker">Worker (name or * for all)</label>
+            <input type="text" id="execWorker" placeholder="this-laptop">
+          </div>
+          <div class="field" style="flex: 2;">
+            <label for="execCommand">Shell command</label>
+            <input type="text" id="execCommand" placeholder="df -h">
+          </div>
+          <button class="action danger" id="execBtn" type="button">Run</button>
+        </div>
+        <div class="action-result" id="execResult"></div>
+      </div>
+
+      <div class="action-group">
+        <h3>Health check</h3>
+        <div class="field-row">
+          <button class="action" id="healthBtn" type="button">Check all workers</button>
+        </div>
+        <div class="action-result" id="healthResult"></div>
+      </div>
+    </div>
+  </section>
+
   <footer id="footerNote">
-    Reads <code>coordinator/status.json</code>, written by
-    <code>coordinator.py status</code> or <code>watch</code>. Refreshes every 10s.
+    Reads the coordinator's control API (<code>coordinator/control_api.py</code>), which wraps the
+    same status/dispatch/exec/health functions <code>coordinator.py</code>'s CLI uses. Refreshes every 10s.
   </footer>
 </div>
 
 <script>
-  const STATUS_URL = "../coordinator/status.json";
   const POLL_INTERVAL_MS = 10000;
+  const CONFIG_KEY = "multigpu_dashboard_config";
+
+  function loadConfig() {
+    try {
+      return JSON.parse(localStorage.getItem(CONFIG_KEY)) || {};
+    } catch {
+      return {};
+    }
+  }
+
+  function saveConfig(cfg) {
+    localStorage.setItem(CONFIG_KEY, JSON.stringify(cfg));
+  }
+
+  function apiBase() {
+    return (loadConfig().apiBase || "http://127.0.0.1:8790").replace(/\/$/, "");
+  }
+
+  function apiToken() {
+    return loadConfig().apiToken || "";
+  }
+
+  async function apiCall(path, opts = {}) {
+    const resp = await fetch(apiBase() + path, {
+      ...opts,
+      headers: {
+        "Content-Type": "application/json",
+        ...(opts.method && opts.method !== "GET" ? { "Authorization": `Bearer ${apiToken()}` } : {}),
+        ...(opts.headers || {}),
+      },
+    });
+    const text = await resp.text();
+    let data;
+    try { data = JSON.parse(text); } catch { data = { raw: text }; }
+    return { ok: resp.ok, status: resp.status, data };
+  }
+
+  function showResult(el, ok, data) {
+    el.classList.add("show");
+    el.classList.toggle("ok", ok);
+    el.classList.toggle("err", !ok);
+    el.textContent = JSON.stringify(data, null, 2);
+  }
+
+  {
+    const cfg = loadConfig();
+    document.getElementById("apiBase").value = cfg.apiBase || "http://127.0.0.1:8790";
+    document.getElementById("apiToken").value = cfg.apiToken || "";
+    document.getElementById("saveConfigBtn").addEventListener("click", () => {
+      saveConfig({
+        apiBase: document.getElementById("apiBase").value.trim(),
+        apiToken: document.getElementById("apiToken").value,
+      });
+      refresh();
+    });
+
+    document.getElementById("dispatchBtn").addEventListener("click", async () => {
+      const btn = document.getElementById("dispatchBtn");
+      const result = document.getElementById("dispatchResult");
+      const jobSpec = document.getElementById("dispatchJobSpec").value.trim();
+      if (!jobSpec) { showResult(result, false, { error: "job spec name required" }); return; }
+      btn.disabled = true;
+      try {
+        const { ok, data } = await apiCall("/api/dispatch", {
+          method: "POST", body: JSON.stringify({ job_spec: jobSpec }),
+        });
+        showResult(result, ok, data);
+        if (ok) refresh();
+      } catch (err) {
+        showResult(result, false, { error: err.message });
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    document.getElementById("execBtn").addEventListener("click", async () => {
+      const btn = document.getElementById("execBtn");
+      const result = document.getElementById("execResult");
+      const worker = document.getElementById("execWorker").value.trim();
+      const command = document.getElementById("execCommand").value.trim();
+      if (!worker || !command) { showResult(result, false, { error: "worker and command required" }); return; }
+      btn.disabled = true;
+      try {
+        const { ok, data } = await apiCall("/api/exec", {
+          method: "POST", body: JSON.stringify({ worker, command }),
+        });
+        showResult(result, ok, data);
+      } catch (err) {
+        showResult(result, false, { error: err.message });
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    document.getElementById("healthBtn").addEventListener("click", async () => {
+      const btn = document.getElementById("healthBtn");
+      const result = document.getElementById("healthResult");
+      btn.disabled = true;
+      try {
+        const { ok, data } = await apiCall("/api/health", { method: "POST", body: "{}" });
+        showResult(result, ok, data);
+      } catch (err) {
+        showResult(result, false, { error: err.message });
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  }
 
   function fmtAgo(unixSeconds) {
     if (!unixSeconds) return "—";
@@ -458,7 +723,7 @@
     const notice = document.getElementById("statusNotice");
     const noticeText = document.getElementById("statusNoticeText");
     try {
-      const resp = await fetch(STATUS_URL, { cache: "no-store" });
+      const resp = await fetch(apiBase() + "/api/status", { cache: "no-store" });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
 
@@ -477,10 +742,11 @@
 
       notice.style.display = "none";
       document.getElementById("footerNote").innerHTML =
-        `Reads <code>coordinator/status.json</code>. Last updated ${fmtAgo(data.generated_at)}.`;
+        `Reading ${apiBase()}/api/status. Last updated ${fmtAgo(data.generated_at)}.`;
     } catch (err) {
       notice.style.display = "flex";
-      noticeText.textContent = `Could not load status.json (${err.message}). Run "python coordinator/coordinator.py watch" on the coordinator machine.`;
+      noticeText.textContent = `Could not reach ${apiBase()}/api/status (${err.message}). ` +
+        `Start it with "python coordinator/control_api.py" on the coordinator machine, and check the API base URL above.`;
     }
   }
 

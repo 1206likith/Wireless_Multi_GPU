@@ -1,0 +1,21 @@
+name: test-noop
+version: 1
+entry_point: coordinator/test_noop_job.py
+description: >
+  Trivial no-op job for exercising the coordinator/control API dispatch
+  path (both CLI and the /api/dispatch HTTP endpoint) without running the
+  real multi-hour YOLO DDP training job. Mirrors
+  coordinator/test_noop_job.yaml, but lives under job-specs/ so
+  control_api.py's /api/dispatch (which only resolves names under
+  job-specs/, see _job_spec_path) can reference it by name.
+
+requires:
+  min_gpu_memory_gb: 0
+  dataset: none
+  python_env: none
+
+roles:
+  rank_assignment: coordinator-assigned
+
+env:
+  MASTER_PORT: "29602"

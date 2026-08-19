@@ -51,6 +51,44 @@ data (a machines list + a jobs list + cluster totals) so wiring the static
 dashboard up to live data later is a small fetch+render change, not a
 rewrite.
 
+## Running the control API (for the web dashboard)
+
+`dashboard/index.html` is a real web app, not a static read-only page —
+it has buttons (dispatch, exec, health check) that need something to
+call. `control_api.py` is a small HTTP wrapper around the SAME functions
+`coordinator.py`'s CLI already uses (no new worker-facing behavior, no
+new security surface on the worker side):
+
+```bash
+# One-time: generate this API's own bearer token (SEPARATE from any
+# worker's dispatch_token.secret -- this one grants everything
+# coordinator.py's CLI can do, including /exec on any configured worker).
+python -c "import secrets; print(secrets.token_hex(32))" > coordinator/control_api_token.secret
+
+python coordinator/control_api.py --port 8790 --token-file coordinator/control_api_token.secret
+
+# Serve the dashboard itself over HTTP (fetch() needs a real origin, not file://):
+cd dashboard && python -m http.server 8080
+```
+
+Then open `http://127.0.0.1:8080/index.html`, enter the control API's
+base URL (`http://127.0.0.1:8790` by default) and the token from
+`control_api_token.secret` into the dashboard's "Control API" panel, and
+click Save. The token is stored only in that browser's own
+`localStorage` — this project never bakes a secret into a static HTML
+file. Endpoints: `GET /api/status` (unauthenticated, read-only, same
+data as `status.json`), `POST /api/dispatch` `{job_spec: "<name>"}`,
+`POST /api/exec` `{worker, command}`, `POST /api/health`,
+`POST /api/send-dataset` `{worker, dataset_path, advertise_host}` — all
+POST endpoints require the same bearer-token auth as `/dispatch` does on
+a worker.
+
+Binds `127.0.0.1` by default, same reasoning as `worker_daemon.py` —
+only bind a real interface deliberately. If you want the dashboard
+reachable from another machine on the tailnet, bind `control_api.py` to
+this machine's Tailscale IP and set the dashboard's "API base URL" field
+to that same IP.
+
 ## Security model
 
 - **entry_point allowlist**: `worker_daemon.py`'s `ALLOWED_ENTRY_POINTS` is
@@ -151,6 +189,15 @@ to the entire cluster** — that is genuinely what they are now.
   YOLO DDP job across both laptops through the coordinator is the
   remaining unverified step, blocked on the second laptop's
   worker_daemon.py actually being reachable (see below).
+- **`/api/status` is slow when a worker is unreachable.** Each worker
+  poll has its own `HTTP_TIMEOUT_S` (5s) in `coordinator.py`; with one
+  worker offline, `/api/status` takes ~5-8s to respond (waits out that
+  worker's timeout before returning). Fine for a 10s dashboard poll
+  interval with 2 workers, but would compound linearly with more
+  offline workers — polls aren't parallelized. Not fixed, since it's not
+  wrong, just slow; would need `concurrent.futures` or threads in
+  `poll_worker`'s caller if this becomes a real problem at a larger
+  worker count.
 - **Auto-fix scope is intentionally narrow.** `coordinator.py heal`
   currently mirrors `health`'s findings rather than actually fixing
   anything automatically — see `cmd_heal`'s own docstring for exactly
@@ -163,11 +210,20 @@ to the entire cluster** — that is genuinely what they are now.
 ## Testing
 
 ```bash
-python coordinator/test_e2e.py
+python coordinator/test_e2e.py           # coordinator.py CLI <-> worker_daemon.py
+python coordinator/test_control_api.py   # control_api.py HTTP wrapper <-> worker_daemon.py
 ```
 
-Starts a worker daemon on loopback with a throwaway token, dispatches a
-trivial no-op job (`test_noop_job.py`/`.yaml` — NOT the real training
-script, to avoid colliding with actual training running on this GPU),
-and asserts the full poll → dispatch → run → status → dashboard-shape
-loop works, plus the entry_point-allowlist and auth rejections.
+`test_e2e.py` starts a worker daemon on loopback with a throwaway token,
+dispatches a trivial no-op job (`test_noop_job.py`/`.yaml` — NOT the real
+training script, to avoid colliding with actual training running on this
+GPU), and asserts the full poll → dispatch → run → status →
+dashboard-shape loop works, plus the entry_point-allowlist, WSL2
+dispatch, and auth rejections.
+
+`test_control_api.py` starts a worker daemon AND `control_api.py` on
+loopback with throwaway tokens, then drives every `/api/*` endpoint
+exactly like `dashboard/index.html`'s own JS does (real HTTP calls, same
+payload shapes) — asserts real dispatch/exec/health work end-to-end
+through the HTTP layer, plus auth rejection and job-spec-name validation
+(path traversal, nonexistent names).
