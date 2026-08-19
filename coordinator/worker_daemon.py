@@ -55,8 +55,10 @@ machine's own checkout of this repo, at whatever commit was pulled.
 """
 import argparse
 import hmac
+import ipaddress
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -305,6 +307,53 @@ def get_gpu_info():
     return gpus
 
 
+_HOSTNAME_RE = re.compile(r"^[A-Za-z0-9.-]{1,255}$")
+
+
+def _validate_wsl_launch_value(name, value, kind):
+    """SECURITY: build_launch_argv interpolates these values directly into
+    a `bash -lc "..."` string run inside WSL2 -- a security review
+    correctly flagged this as command injection, since these values come
+    from the /dispatch HTTP payload's `env` dict, which is only gated by
+    a shared bearer token, not otherwise trusted input. quoting alone
+    (shlex.quote) would stop shell metacharacters, but these fields are
+    also structurally constrained (a hostname, a port number, a batch
+    size, a filesystem path) -- validating the actual shape is a
+    stronger and clearer guarantee than escaping, and matches this
+    project's existing allowlist-over-blocklist approach (see
+    ALLOWED_ENTRY_POINTS, ALLOWED_ENV_KEYS). Raises ValueError with a
+    clear reason on failure; caller must not proceed to build inner_cmd
+    on that exception."""
+    if kind == "host":
+        try:
+            ipaddress.ip_address(value)
+            return value
+        except ValueError:
+            pass
+        if _HOSTNAME_RE.match(value):
+            return value
+        raise ValueError(f"{name} {value!r} is not a valid IP address or hostname")
+    if kind == "port":
+        if not str(value).isdigit() or not (1 <= int(value) <= 65535):
+            raise ValueError(f"{name} {value!r} is not a valid port number")
+        return str(int(value))
+    if kind == "int":
+        if not str(value).isdigit():
+            raise ValueError(f"{name} {value!r} is not a valid integer")
+        return str(int(value))
+    if kind == "path":
+        # DATA_ROOT becomes a `DATA_ROOT=<value>` shell-env assignment
+        # ahead of torchrun -- reject anything with shell metacharacters,
+        # whitespace, or a leading '-' (which could be misread as a flag
+        # by something downstream). This does not need to be a real path
+        # on this machine (WSL2 paths differ from the Windows daemon's
+        # own filesystem), just free of shell-breaking characters.
+        if not re.match(r"^[A-Za-z0-9._/\-]{1,4096}$", str(value)) or str(value).startswith("-"):
+            raise ValueError(f"{name} {value!r} contains disallowed characters for a path")
+        return str(value)
+    raise AssertionError(f"unknown validation kind {kind!r}")
+
+
 def build_launch_argv(entry_point_str, script_path, env, rank, world_size, local_rank):
     """Returns the subprocess argv to actually launch this job with.
 
@@ -331,17 +380,27 @@ def build_launch_argv(entry_point_str, script_path, env, rank, world_size, local
         return [sys.executable, str(script_path)]
 
     wsl_repo_root = _windows_path_to_wsl(REPO_ROOT)
-    wsl_script_rel = entry_point_str  # already relative, forward-slashed
-    master_addr = env.get("MASTER_ADDR", "127.0.0.1")
-    master_port = env.get("MASTER_PORT", "29500")
-    per_gpu_batch = env.get("PER_GPU_BATCH")
-    data_root = env.get("DATA_ROOT")
+    wsl_script_rel = entry_point_str  # already relative, forward-slashed; entry_point_str
+                                       # itself is validated against WSL2_ENTRY_POINTS by
+                                       # the caller before this function is ever reached
+
+    # SECURITY: every value below is interpolated into a `bash -lc "..."`
+    # string that actually runs inside WSL2 -- see _validate_wsl_launch_value's
+    # docstring. All must pass validation before inner_cmd is built; any
+    # ValueError here propagates to the /dispatch handler, which rejects
+    # the request with HTTP 403 rather than launching anything.
+    master_addr = _validate_wsl_launch_value("MASTER_ADDR", env.get("MASTER_ADDR", "127.0.0.1"), "host")
+    master_port = _validate_wsl_launch_value("MASTER_PORT", env.get("MASTER_PORT", "29500"), "port")
+    rank = _validate_wsl_launch_value("rank", rank, "int")
+    world_size = _validate_wsl_launch_value("world_size", world_size, "int")
 
     env_prefix = ""
+    per_gpu_batch = env.get("PER_GPU_BATCH")
     if per_gpu_batch:
-        env_prefix += f"PER_GPU_BATCH={per_gpu_batch} "
+        env_prefix += f"PER_GPU_BATCH={_validate_wsl_launch_value('PER_GPU_BATCH', per_gpu_batch, 'int')} "
+    data_root = env.get("DATA_ROOT")
     if data_root:
-        env_prefix += f"DATA_ROOT={data_root} "
+        env_prefix += f"DATA_ROOT={_validate_wsl_launch_value('DATA_ROOT', data_root, 'path')} "
 
     inner_cmd = (
         f"source {WSL2_VENV}/bin/activate && "
@@ -669,8 +728,15 @@ class Handler(BaseHTTPRequestHandler):
         if master_port:
             env["MASTER_PORT"] = str(master_port)
 
-        argv = build_launch_argv(entry_point, script_path, env, rank, world_size,
-                                  payload.get("local_rank", 0))
+        try:
+            argv = build_launch_argv(entry_point, script_path, env, rank, world_size,
+                                      payload.get("local_rank", 0))
+        except ValueError as exc:
+            # SECURITY: a dispatch value failed WSL2 launch-string validation
+            # (see _validate_wsl_launch_value) -- refuse rather than build a
+            # shell command from an unvalidated value.
+            self._send_json(403, {"error": str(exc)})
+            return
         ok, err = JOB.try_start(spec.get("name", entry_point), argv, env, rank, world_size)
         if not ok:
             self._send_json(409, {"error": err})

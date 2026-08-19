@@ -161,6 +161,28 @@ def main():
         else:
             print("SKIP: WSL2 dispatch check (no WSL2/Ubuntu-24.04/yolo_ddp_env on this machine)")
 
+        # Regression test for a real command-injection vulnerability found
+        # by a security review: build_launch_argv (worker_daemon.py)
+        # interpolated MASTER_ADDR/MASTER_PORT/PER_GPU_BATCH/DATA_ROOT
+        # directly into a `bash -lc "..."` string run inside WSL2, with no
+        # validation -- a malicious MASTER_ADDR like
+        # "127.0.0.1; touch /tmp/pwned" would have injected an arbitrary
+        # second shell command. Fixed with _validate_wsl_launch_value
+        # (host/port/int/path format checks per field). This test dispatches
+        # exactly such a payload against the entry_point in
+        # WSL2_ENTRY_POINTS and asserts it's rejected with HTTP 403 BEFORE
+        # wsl.exe is ever invoked -- runs unconditionally (no WSL2 install
+        # required), since validation happens before the WSL2 launch step.
+        injection_spec_yaml = "name: inject-attempt\nentry_point: coordinator/test_noop_job_wsl2.py\n"
+        code, resp4 = coord.dispatch_job(
+            worker, injection_spec_yaml, yaml.safe_load(injection_spec_yaml),
+            rank=0, world_size=1, master_addr="127.0.0.1; touch /tmp/pwned_e2e_marker",
+            master_port="29500",
+        )
+        if code != 403:
+            fail(f"expected 403 for a command-injecting MASTER_ADDR, got {code}: {resp4}")
+        print("OK: command-injecting MASTER_ADDR in WSL2 dispatch correctly rejected with HTTP 403")
+
         # Bonus: reject-on-bad-entry_point check (security constraint) --
         # rejected both because it's a path escape AND because it's not in
         # worker_daemon.py's ALLOWED_ENTRY_POINTS allowlist.
