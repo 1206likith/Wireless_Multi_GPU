@@ -428,12 +428,16 @@ class JobState:
         self.rank = None
         self.world_size = None
         self.error = None
+        self.log_file = None
 
     def snapshot(self):
         with self.lock:
             if self.proc is not None and self.proc.poll() is not None and self.exit_code is None:
                 self.exit_code = self.proc.returncode
                 self.finished_at = time.time()
+                if self.log_file is not None:
+                    self.log_file.close()
+                    self.log_file = None
 
             if self.job_name is None:
                 status = "idle"
@@ -468,10 +472,23 @@ class JobState:
             self.finished_at = None
             self.exit_code = None
             self.error = None
+            # SECURITY/DEBUGGABILITY: previously stdout/stderr went to
+            # DEVNULL -- a real cross-machine training job failed after
+            # 112 minutes with no way to see WHY (no traceback, no NCCL
+            # error text, nothing) since the actual Python/torchrun output
+            # was discarded. Redirect to a per-job log file instead so a
+            # future failure is diagnosable via `/exec cat
+            # coordinator/job_output.log` rather than pure guesswork.
+            # Overwritten each dispatch (not appended) -- only the most
+            # recent job's output matters for debugging the most recent
+            # failure; unbounded append growth on a long-running worker
+            # serves no purpose here.
+            log_path = Path(__file__).resolve().parent / "job_output.log"
             try:
+                self.log_file = open(log_path, "w", encoding="utf-8", errors="replace")
                 self.proc = subprocess.Popen(
                     argv, cwd=str(REPO_ROOT), env=env,
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    stdout=self.log_file, stderr=subprocess.STDOUT,
                 )
             except OSError as exc:
                 self.error = f"failed to launch subprocess: {exc}"
