@@ -120,12 +120,23 @@ def dispatch_job(worker, job_spec_yaml_text, spec, rank, world_size, master_addr
     plus this worker's rank assignment. Computes PER_GPU_BATCH from the
     spec's `requires.min_gpu_memory_gb` if the placeholder "{auto}" is used,
     else passes the spec's env values through unchanged -- deliberately
-    simple, not a real bin-packing scheduler."""
+    simple, not a real bin-packing scheduler.
+
+    Per-worker env overrides (workers.yaml's optional `env_overrides` key)
+    are applied AFTER the spec's own env, so a worker-specific value (e.g.
+    DATA_ROOT, since each machine's filesystem layout genuinely differs --
+    confirmed needed when dheeraj's laptop's dataset landed at
+    /mnt/c/multigpu-setup instead of this laptop's /mnt/l/... path) always
+    wins over the job spec's default. Still passes through
+    worker_daemon.py's own ALLOWED_ENV_KEYS allowlist unchanged -- this is
+    a per-worker VALUE override, not a new trust boundary; a worker still
+    only accepts keys it already allowed."""
     env = {}
     spec_env = spec.get("env", {}) if isinstance(spec, dict) else {}
     for key, val in spec_env.items():
         if val == "{auto}":
             env[key] = "8"  # simple fixed fallback; a real auto-tuner is out of scope
+    env.update(worker.get("env_overrides", {}) or {})
     payload = {
         "job_spec_yaml": job_spec_yaml_text,
         "rank": rank,

@@ -10,12 +10,24 @@
 #   python -c "import secrets; print(secrets.token_hex(32))" > coordinator/tokens/this-laptop.secret
 # and copy it to that worker out-of-band (NOT over this project's own HTTP
 # channel) -- `coordinator/tokens/` is gitignored, never commit a real token.
+#
+# env_overrides (optional): per-worker env values that win over the job
+# spec's own env block at dispatch time -- needed because each machine's
+# filesystem layout genuinely differs (e.g. DATA_ROOT), confirmed when
+# dheeraj's laptop's dataset landed at C:\multigpu-setup instead of this
+# laptop's L:\...\full-project\prototype layout. Only keys already in
+# worker_daemon.py's ALLOWED_ENV_KEYS actually take effect on the worker
+# side -- this is a per-worker VALUE override, not a new trust boundary.
 workers:
   - name: this-laptop
     host: 100.127.244.13  # this laptop's real Tailscale IP, confirmed reachable 2026-07-25
     port: 8770
     token_file: coordinator/tokens/this-laptop.secret
+    env_overrides:
+      DATA_ROOT: /mnt/l/Likith/Coding_Projects/IDP_D_J/full-project/prototype  # matches the training script's own default, set explicitly for clarity/consistency with second-laptop's override below
   - name: second-laptop
     host: 100.81.199.100  # re-registered IP after fresh Tailscale login post-invite-accept, 2026-07-25
     port: 8770
     token_file: coordinator/tokens/second-laptop.secret
+    env_overrides:
+      DATA_ROOT: /mnt/c/multigpu-setup  # dataset landed here via `send-dataset` 2026-08-20 (different layout than this-laptop -- separate machine, separate repo checkout)
