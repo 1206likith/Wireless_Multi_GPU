@@ -1,0 +1,27 @@
+# Force LF line endings for scripts that run inside WSL2/Linux bash,
+# regardless of a checking-out machine's own core.autocrlf setting.
+#
+# WHY THIS EXISTS: install.sh (LF in this repo) got checked out with CRLF
+# line endings on a fresh Windows clone where core.autocrlf=true (the
+# common Windows Git default) -- bash inside WSL2 then failed on every
+# line with "$'\r': command not found" and a syntax error at EOF. This
+# repo's own working copy didn't show the problem (files edited in place
+# after an earlier clone, not freshly checked out), which is exactly the
+# kind of machine-to-machine inconsistency a .gitattributes fixes: without
+# it, whether a script works after `git clone` depends on the cloning
+# machine's global git config, not on anything in this repo. Confirmed
+# root cause via a real failure on a second machine (dheeraj's laptop),
+# not assumed.
+#
+# .py and .ps1 files aren't currently failing the same way (Python
+# tolerates CRLF fine, and .ps1 files only ever run on Windows where CRLF
+# is native) but are pinned here too as a defensive default -- .py/.sh
+# scripts specifically get executed as bash/python where CRLF can bite,
+# and there's no reason for this repo's own history to carry mixed line
+# endings depending on who last edited a file on which OS.
+*.sh   text eol=lf
+*.py   text eol=lf
+*.ps1  text eol=crlf
+*.yaml text eol=lf
+*.yml  text eol=lf
+*.md   text eol=lf
