@@ -1,66 +1,82 @@
 # Multi-GPU DDP Training Setup
 
-One-step environment setup for joining a second (or further) GPU laptop to
-this project's distributed YOLOv8 training, over WSL2 + NCCL (see
-`DDP_MULTINODE_SETUP.md` for the full reasoning and manual steps).
+A coordinator + worker system for joining 2+ Windows/WSL2 GPU laptops into
+one distributed YOLOv8 training cluster over Tailscale + NCCL. One script
+(`setup-worker.ps1`) takes a new laptop from nothing installed to a
+running, auto-starting worker — see "One-shot worker setup" below.
 
-## Quick start (on the second laptop)
+## One-shot worker setup (on each new laptop)
 
-**If WSL2 isn't installed yet**, open PowerShell **as Administrator** on
-Windows and run:
+On a **completely fresh** Windows machine (nothing installed yet), open
+PowerShell **as Administrator** and run:
 ```powershell
-wsl --install -d Ubuntu-24.04
+git clone https://github.com/1206likith/Wireless_Multi_GPU.git C:\multigpu-setup
+cd C:\multigpu-setup
+powershell -ExecutionPolicy Bypass -File setup-worker.ps1
 ```
-Reboot when prompted, then open the new "Ubuntu" app from the Start menu.
+(Replace the repo URL with wherever this repo actually lives — see
+`git remote -v` in this checkout, or ask the project owner.)
 
-**Inside that Ubuntu shell**, run:
-```bash
-curl -fsSL https://raw.githubusercontent.com/1206likith/Wireless_Multi_GPU/master/install.sh | bash
-```
-(Replace `1206likith/Wireless_Multi_GPU` with wherever this repo actually lives
-— see the URL in your browser or `git remote -v` in this repo.)
+`setup-worker.ps1` chains together everything this project previously
+required as separate manual steps:
+1. Installs WSL2 + Ubuntu-24.04 if not already present.
+2. Installs Tailscale (with signature verification) and sets up WSL2
+   mirrored networking + the required firewall rule.
+3. Installs PyTorch/NCCL/ultralytics inside WSL2 (delegates to
+   `install.sh`, same as before).
+4. Generates this worker's dispatch token.
+5. Registers `worker_daemon.py` as a Windows Scheduled Task that starts
+   automatically at login and restarts itself if it crashes.
+6. Verifies the daemon actually answers over Tailscale before finishing.
 
-This automatically:
-- Confirms you're in WSL2 and GPU passthrough works
-- Installs Python/pip/venv if missing
-- Installs PyTorch (CUDA 12.8) + ultralytics into a venv at `~/yolo_ddp_env`
-- Verifies NCCL is available (the whole point of using WSL2 over native
-  Windows for this — see `DDP_MULTINODE_SETUP.md`)
-- Clones this repo's training script into `~/yolo_ddp_project`
+**Three things genuinely cannot be one click**, and the script tells you
+exactly what to do for each rather than silently failing:
+- **A reboot**, if WSL2 wasn't already installed — this is a real Windows
+  kernel-component requirement, not something a script can skip. The
+  script detects this, tells you to reboot and re-run the *exact same
+  command* (it's idempotent — already-done steps are skipped on rerun),
+  and exits cleanly.
+- **Tailscale's first login** — an interactive OAuth browser flow
+  (Google/Microsoft/GitHub/email). The script opens it for you; you
+  click through it once.
+- **Administrator elevation itself** — Windows requires this for WSL2,
+  firewall rules, and the Scheduled Task; there's no way around the UAC
+  prompt, by design.
 
-It prints a clear summary at the end: what succeeded automatically, and
-what still needs manual action (there are two things it genuinely can't
-automate — see below).
+At the end, the script prints the exact `workers.yaml` entry to add on
+the coordinator machine, and reminds you to copy the generated token
+file over out-of-band (never over this project's own HTTP channel).
 
-## What still needs manual steps (can't be automated by install.sh)
+## What still needs manual steps after setup-worker.ps1
 
 1. **The dataset.** `data/yolo_detect_v4/` (~1GB) needs to physically get
-   onto the second laptop — ask whoever's running the main laptop for
-   the current transfer method (shared drive, direct file copy, etc).
-   Set the `DATA_ROOT` environment variable to point at wherever it ends
-   up if it's not at the same path as the main laptop.
-2. **Networking.** WSL2 defaults to a private NAT network not reachable
-   from another machine on the LAN. On **both** laptops, create/edit
-   `%USERPROFILE%\.wslconfig` (Windows side):
-   ```ini
-   [wsl2]
-   networkingMode=mirrored
-   ```
-   Then (from Windows PowerShell) `wsl --shutdown` and reopen Ubuntu on
-   both machines. This is the one piece not yet verified as working —
-   test it before trusting a full training run to it.
+   onto the new machine. Use the coordinator's `send-dataset` command
+   (or the dashboard's future dataset-push action) from the main laptop
+   once this worker is reachable — see `coordinator/README.md`.
+2. **Adding the worker to `workers.yaml`** on the coordinator machine —
+   the script prints the exact entry to add; this repo's `workers.yaml`
+   isn't shared automatically across machines (each machine has its own
+   checkout).
 
-Once both of those are done, see `DDP_MULTINODE_SETUP.md`'s launch
-instructions (or `scripts/36b_train_yolo_v4_ddp_wsl2.py`'s own docstring)
-for the exact `torchrun` commands to run on each machine.
+Once both of those are done, `coordinator.py dispatch
+job-specs/yolo-detect-v4-ddp.yaml` (or the dashboard's Dispatch button)
+runs the real training job across every configured worker.
 
 ## Repo contents
 
-- `install.sh` — the one-step setup script described above.
+- `setup-worker.ps1` — the one-shot Windows-side setup script described
+  above; the actual entry point for adding a new machine to the cluster.
+- `install-host-tailscale.ps1` — Tailscale + WSL2 mirrored-networking
+  setup, called by `setup-worker.ps1` (also runnable standalone).
+- `install.sh` — WSL2-side Python/PyTorch/NCCL setup, called by
+  `setup-worker.ps1` via `wsl -d Ubuntu-24.04 -- bash install.sh` (also
+  runnable standalone from inside WSL2, unchanged from before).
+- `coordinator/` — the coordinator, worker daemon, and control API; see
+  `coordinator/README.md` for how to dispatch jobs and use the web
+  dashboard.
 - `scripts/36b_train_yolo_v4_ddp_wsl2.py` — the actual multi-node DDP
-  training script (run identically on every participating machine, each
-  with a different `--node_rank`).
-- `DDP_MULTINODE_SETUP.md` — full setup checklist and background on why
-  this uses WSL2 + NCCL instead of native Windows PyTorch (short version:
-  native Windows has no NCCL backend at all, and the workaround segfaults
-  — root-caused in an earlier session, not fixable from Python).
+  training script.
+- `DDP_MULTINODE_SETUP.md` — background on why this uses WSL2 + NCCL
+  instead of native Windows PyTorch (native Windows has no NCCL backend
+  at all, and the workaround segfaults — root-caused in an earlier
+  session, not fixable from Python).
