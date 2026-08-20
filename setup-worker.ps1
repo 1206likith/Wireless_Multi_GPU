@@ -84,7 +84,18 @@ if ($wslPlatformPresent) {
     # nulls/odd spacing -- normalize before matching so a real match isn't
     # missed due to encoding artifacts, not just literal string comparison.
     $normalized = ($distroList -replace "`0", "") -replace "\s+", ""
-    $distroRegistered = $normalized -match [regex]::Escape($WslDistro -replace "\s+", "")
+    # NOTE: the inner (...) around the -replace expression is required, not
+    # cosmetic -- without it, PowerShell's static-method-call parser reads
+    # "-replace" as a second positional argument to Escape() rather than
+    # part of the expression producing the first argument, and throws
+    # "Cannot find an overload for 'Escape' and the argument count: 2" at
+    # runtime (confirmed by reproducing this exact error on Windows
+    # PowerShell 5.1 with the un-parenthesized form, then confirming the
+    # parenthesized form works correctly -- found via a real run on
+    # dheeraj's laptop, not caught by [scriptblock]::Create syntax-checking
+    # alone, since that only validates parseability, not this kind of
+    # argument-binding ambiguity).
+    $distroRegistered = $normalized -match [regex]::Escape(($WslDistro -replace "\s+", ""))
 }
 
 if ($wslPlatformPresent -and $distroRegistered) {
@@ -94,20 +105,45 @@ if ($wslPlatformPresent -and $distroRegistered) {
     wsl --install -d $WslDistro
     $installExit = $LASTEXITCODE
 
-    # A fresh WSL2 kernel-component install almost always requires a real
-    # reboot before `wsl -d <distro>` will work at all -- this is a Windows
-    # constraint (Hyper-V/Virtual Machine Platform optional components need
-    # a restart to activate), not something this script can skip. Detect it
-    # honestly rather than continuing into failures that would look like
-    # bugs in THIS script.
-    Write-Host ""
-    Write-Warn "WSL2 install command finished (exit code $installExit). A REBOOT IS LIKELY REQUIRED before $WslDistro can actually be entered for the first time -- this is a Windows requirement, not something this script can bypass."
-    Write-Host ""
-    Write-Host "NEXT STEP: reboot this machine now, then re-run this EXACT command (as Administrator):" -ForegroundColor Yellow
-    Write-Host "  powershell -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -ForegroundColor Yellow
-    Write-Host ""
-    Write-Host "This script is idempotent -- re-running it will detect WSL2 is now ready and continue from Step 2 automatically." -ForegroundColor Yellow
-    exit 2
+    # Don't trust $installExit alone to decide reboot-vs-ready: a real
+    # session found `wsl --install` can fail with a transient network error
+    # (WININET_E_NAME_NOT_RESOLVED fetching the distro list) while STILL
+    # partially registering the distro, so a later rerun hits
+    # ERROR_ALREADY_EXISTS even though the distro is registered but was
+    # never actually confirmed usable -- and separately, the distro CAN
+    # already be fully usable (e.g. registered by a previous run, or by
+    # the user directly) even when this specific `wsl --install` call
+    # reports a nonzero/error exit code, because "already exists" isn't a
+    # real failure. Ground truth is only "can I actually run a command
+    # inside it right now" -- check that directly instead of trusting exit
+    # codes or reasoning about install-command semantics.
+    $distroActuallyUsable = $false
+    try {
+        wsl -d $WslDistro -- true 2>&1 | Out-Null
+        $distroActuallyUsable = ($LASTEXITCODE -eq 0)
+    } catch {
+        $distroActuallyUsable = $false
+    }
+
+    if ($distroActuallyUsable) {
+        Write-Ok "WSL2 + $WslDistro is installed and usable (verified with a real command, not just the install command's exit code)."
+    } else {
+        # A fresh WSL2 kernel-component install almost always requires a
+        # real reboot before `wsl -d <distro>` will work at all -- this is
+        # a Windows constraint (Hyper-V/Virtual Machine Platform optional
+        # components need a restart to activate), not something this
+        # script can skip. Only tell the user to reboot once the distro is
+        # CONFIRMED not actually usable yet, not just because the install
+        # command itself reported a nonzero exit code.
+        Write-Host ""
+        Write-Warn "WSL2 install command finished (exit code $installExit), and $WslDistro is not usable yet. A REBOOT IS LIKELY REQUIRED before it can actually be entered for the first time -- this is a Windows requirement, not something this script can bypass."
+        Write-Host ""
+        Write-Host "NEXT STEP: reboot this machine now, then re-run this EXACT command (as Administrator):" -ForegroundColor Yellow
+        Write-Host "  powershell -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "This script is idempotent -- re-running it will detect WSL2 is now ready and continue from Step 2 automatically." -ForegroundColor Yellow
+        exit 2
+    }
 }
 
 # --- Step 2: Tailscale + mirrored networking (delegates to the existing,
